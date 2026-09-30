@@ -57,7 +57,8 @@ start() {
 }
 
 # psql over TCP as the application user, so scram auth and pg_hba are exercised.
-q() { docker exec -e PGPASSWORD=s3cret "$name" psql -X -At -v ON_ERROR_STOP=1 -h 127.0.0.1 -U homeassistant -d homeassistant -c "$1"; }
+pw=s3cret
+q() { docker exec -e PGPASSWORD="$pw" "$name" psql -X -At -v ON_ERROR_STOP=1 -h 127.0.0.1 -U homeassistant -d homeassistant -c "$1"; }
 
 stop() {
     local t0=$SECONDS
@@ -94,6 +95,7 @@ stop
 
 echo "== Restart is idempotent and picks up new options"
 write_options n3w-pass true
+pw=n3w-pass
 start current
 docker exec -e PGPASSWORD=n3w-pass "$name" psql -X -At -h 127.0.0.1 -U homeassistant -d homeassistant -c 'SELECT 1' >/dev/null ||
     fail "password change not applied"
@@ -113,7 +115,6 @@ stop
 data=$restored
 start current
 docker logs "$name" 2>&1 | grep -q 'Restore finished' || fail "restore did not run"
-q() { docker exec -e PGPASSWORD=n3w-pass "$name" psql -X -At -v ON_ERROR_STOP=1 -h 127.0.0.1 -U homeassistant -d homeassistant -c "$1"; }
 [ "$(q 'SELECT count(*) FROM m')" = "$rows" ] || fail "row count changed after restore"
 [ "$(q "SELECT count(*) FROM timescaledb_information.hypertables WHERE hypertable_name = 'm'")" = 1 ] || fail "hypertable missing after restore"
 [ ! -e "$data/dump" ] || fail "dump left behind after restore"

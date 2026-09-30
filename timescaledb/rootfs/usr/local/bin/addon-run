@@ -20,6 +20,7 @@ validate_options() {
     bad=$(opt '[.pg_hba[] | select(.type != "local" and (.address // "") == "")] | length')
     [ "$bad" = 0 ] || die "pg_hba rules of type host/hostssl/hostnossl need an address, e.g. 10.0.0.0/8"
 
+    # shellcheck disable=SC2016 # jq variables, not shell
     bad=$(opt '([.users[].name] + ["postgres"]) as $u | [.databases[] | select(.owner != null and (.owner as $o | $u | index($o) | not)) | .owner] | unique | join(", ")')
     [ -z "$bad" ] || die "Database owner(s) not listed under users: $bad"
 }

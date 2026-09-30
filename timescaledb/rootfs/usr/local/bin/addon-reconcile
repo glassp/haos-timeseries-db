@@ -8,7 +8,7 @@ source /usr/local/lib/addon/common.sh
 
 trap 'warn "Applying users/databases failed; see the errors above. The server keeps running."' ERR
 
-wait_ready || die "PostgreSQL did not become ready"
+wait_ready 3600 || die "PostgreSQL did not become ready"
 
 update_timescaledb
 

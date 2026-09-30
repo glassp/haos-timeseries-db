@@ -1,5 +1,6 @@
 # Shared helpers for the add-on scripts. Sourced, not executed.
 # shellcheck shell=bash
+# shellcheck disable=SC2034 # used by the scripts that source this file
 
 OPTIONS=${ADDON_OPTIONS:-/data/options.json}
 export PGDATA=${PGDATA:-/data/postgres}
