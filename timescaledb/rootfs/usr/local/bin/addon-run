@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# Add-on entrypoint: validate options, init or upgrade the cluster, write the
+# generated config and hand over to PostgreSQL.
+set -euo pipefail
+# shellcheck source=../lib/addon/common.sh
+source /usr/local/lib/addon/common.sh
+
+NEW_BIN=$(pg_config --bindir)
+NEW_MAJOR=$(pg_major "$NEW_BIN")
+
+validate_options() {
+    [ -f "$OPTIONS" ] || die "No options found at $OPTIONS"
+    local bad
+
+    bad=$(opt '[.users[] | select((.password // "") == "") | .name] | join(", ")')
+    [ -z "$bad" ] || die "Set a password for user(s): $bad"
+
+    bad=$(opt '[.pg_hba[] | select(.type == "local" and (.address // "") != "")] | length')
+    [ "$bad" = 0 ] || die "pg_hba rules of type 'local' must not have an address"
+    bad=$(opt '[.pg_hba[] | select(.type != "local" and (.address // "") == "")] | length')
+    [ "$bad" = 0 ] || die "pg_hba rules of type host/hostssl/hostnossl need an address, e.g. 10.0.0.0/8"
+
+    bad=$(opt '([.users[].name] + ["postgres"]) as $u | [.databases[] | select(.owner != null and (.owner as $o | $u | index($o) | not)) | .owner] | unique | join(", ")')
+    [ -z "$bad" ] || die "Database owner(s) not listed under users: $bad"
+}
+
+init_cluster() {
+    [ -s "$PGDATA/PG_VERSION" ] && return
+    log "Initializing a new PostgreSQL $NEW_MAJOR cluster in $PGDATA"
+    mkdir -p "$PGDATA"
+    chown postgres:postgres "$PGDATA"
+    chmod 700 "$PGDATA"
+    as_pg initdb -D "$PGDATA" -U postgres -E UTF8 --locale=C.UTF-8 \
+        --auth-local=trust --auth-host=scram-sha-256 >/dev/null
+}
+
+upgrade_cluster() {
+    local data_major prev_major
+    data_major=$(cat "$PGDATA/PG_VERSION")
+    [ "$data_major" = "$NEW_MAJOR" ] && return
+
+    [ "$data_major" -lt "$NEW_MAJOR" ] ||
+        die "Data is from PostgreSQL $data_major but this add-on runs $NEW_MAJOR. Downgrades are not possible; restore a backup of the add-on instead."
+    prev_major=$(cat "$PREV_DIR/PG_MAJOR")
+    [ "$data_major" = "$prev_major" ] ||
+        die "Data is from PostgreSQL $data_major; this add-on version can only upgrade from $prev_major. Install an intermediate add-on version first, or dump and restore."
+
+    local old_bin=$PREV_DIR/bin new_dir=/data/postgres.upgrade
+    log "Upgrading data from PostgreSQL $data_major to $NEW_MAJOR (this can take a while)"
+
+    # pg_upgrade needs the same timescaledb version on both sides, so update
+    # the extension with the old server first.
+    log "Updating timescaledb extension using PostgreSQL $data_major"
+    as_pg "$old_bin/pg_ctl" -D "$PGDATA" -w -t 3600 -l /tmp/pg-old.log \
+        -o "-c listen_addresses='' -c unix_socket_directories=$SOCKET_DIR -c jit=off" start ||
+        { cat /tmp/pg-old.log >&2; die "Could not start PostgreSQL $data_major for the upgrade"; }
+    update_timescaledb
+    local locale
+    locale=$(sql -d postgres -At -F ' ' -c \
+        "SELECT pg_encoding_to_char(encoding), datlocprovider, datcollate, datctype FROM pg_database WHERE datname = 'template0'")
+    as_pg "$old_bin/pg_ctl" -D "$PGDATA" -w -t 3600 -m fast stop
+
+    local encoding provider collate ctype checksums
+    read -r encoding provider collate ctype <<<"$locale"
+    [ "$provider" = c ] || die "Automatic upgrade only supports clusters using the libc locale provider (found '$provider')"
+    checksums=--data-checksums
+    if as_pg "$old_bin/pg_controldata" "$PGDATA" | grep -qE '^Data page checksum version:[[:space:]]+0$'; then
+        checksums=--no-data-checksums
+    fi
+
+    rm -rf "$new_dir"
+    mkdir -p "$new_dir"
+    chown postgres:postgres "$new_dir"
+    chmod 700 "$new_dir"
+    as_pg initdb -D "$new_dir" -U postgres -E "$encoding" --lc-collate="$collate" --lc-ctype="$ctype" \
+        "$checksums" --auth-local=trust --auth-host=scram-sha-256 >/dev/null
+
+    log "Running pg_upgrade"
+    if ! (cd /tmp && as_pg pg_upgrade -U postgres --link -j "$(nproc)" \
+        -b "$old_bin" -B "$NEW_BIN" -d "$PGDATA" -D "$new_dir" \
+        -O "-c shared_preload_libraries=timescaledb -c timescaledb.telemetry_level=off"); then
+        find "$new_dir" -path '*pg_upgrade_output.d*' -name '*.log' -exec tail -n 50 {} + >&2 || true
+        if [ -f "$PGDATA/global/pg_control.old" ]; then
+            mv "$PGDATA/global/pg_control.old" "$PGDATA/global/pg_control"
+        fi
+        rm -rf "$new_dir"
+        die "pg_upgrade failed. Your data in $PGDATA was left as PostgreSQL $data_major; restore a backup or pin the previous add-on version."
+    fi
+
+    rm -rf "$PGDATA"
+    mv "$new_dir" "$PGDATA"
+    touch "$ANALYZE_FLAG"
+    log "Upgrade to PostgreSQL $NEW_MAJOR finished"
+}
+
+write_config() {
+    local include="include_dir = '$CONF_DIR'"
+    grep -qxF "$include" "$PGDATA/postgresql.conf" || echo "$include" >>"$PGDATA/postgresql.conf"
+
+    mkdir -p "$CONF_DIR"
+    rm -f "$CONF_DIR"/*.conf
+    local max_conns
+    max_conns=$(opt '.max_connections')
+
+    if [ "$(opt '.tune')" = true ]; then
+        local memory cpus
+        memory=$(opt '.memory // empty')
+        # Default to a quarter of the host's RAM; Home Assistant lives here too.
+        [ -n "$memory" ] || memory="$(($(awk '/^MemTotal:/ {print $2}' /proc/meminfo) / 4 / 1024))MB"
+        cpus=$(opt '.cpus // empty')
+        [ -n "$cpus" ] || cpus=$(nproc)
+        echo "shared_preload_libraries = 'timescaledb'" >"$CONF_DIR/10-tune.conf"
+        timescaledb-tune --yes --quiet -color=false --conf-path="$CONF_DIR/10-tune.conf" \
+            --memory="$memory" --cpus="$cpus" --max-conns="$max_conns" --pg-version="$NEW_MAJOR" >/dev/null
+        log "Tuned for $memory memory, $cpus CPUs, $max_conns connections"
+    else
+        printf "shared_preload_libraries = 'timescaledb'\nmax_connections = %s\n" "$max_conns" >"$CONF_DIR/10-tune.conf"
+    fi
+
+    local telemetry=off
+    [ "$(opt '.telemetry')" = true ] && telemetry=basic
+    cat >"$CONF_DIR/20-addon.conf" <<EOF
+listen_addresses = '*'
+unix_socket_directories = '$SOCKET_DIR'
+hba_file = '$HBA_FILE'
+timescaledb.telemetry_level = '$telemetry'
+logging_collector = off
+EOF
+
+    opt '.postgresql_config[]' >"$CONF_DIR/30-user.conf"
+}
+
+write_hba() {
+    {
+        echo "# Generated by the add-on on every start; use the pg_hba option instead."
+        echo "local all postgres trust"
+        opt '.pg_hba[] | [.type, .database, .user, (.address // empty), .method] | join("  ")'
+        echo "local all all trust"
+        echo "host  all all 0.0.0.0/0 scram-sha-256"
+        echo "host  all all ::/0      scram-sha-256"
+    } >"$HBA_FILE"
+    chmod 644 "$HBA_FILE"
+}
+
+validate_options
+mkdir -p "$SOCKET_DIR"
+chown postgres:postgres "$SOCKET_DIR"
+if [ -d "$PGDATA" ] && [ "$(stat -c %U "$PGDATA")" != postgres ]; then
+    chown -R postgres:postgres "$PGDATA"
+fi
+
+init_cluster
+upgrade_cluster
+write_config
+write_hba
+
+# Double fork so the reconciler is reparented to init and never shows up as
+# an unknown child of the postmaster.
+(/usr/local/bin/addon-reconcile &)
+
+log "Starting PostgreSQL $NEW_MAJOR with TimescaleDB"
+exec su-exec postgres postgres -D "$PGDATA"

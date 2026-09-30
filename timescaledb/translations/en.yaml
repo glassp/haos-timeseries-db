@@ -1,0 +1,28 @@
+configuration:
+  databases:
+    name: Databases
+    description: Databases to create. owner must be postgres or one of the users; timescaledb enables the extension.
+  users:
+    name: Users
+    description: Login roles. Passwords are applied on every start.
+  pg_hba:
+    name: Client authentication rules
+    description: Extra pg_hba.conf rules, checked before the defaults. Rules of type local take no address.
+  max_connections:
+    name: Max connections
+  tune:
+    name: Auto-tune
+    description: Run timescaledb-tune on every start.
+  memory:
+    name: Memory for tuning
+    description: e.g. 2GB. Defaults to a quarter of the host's RAM.
+  cpus:
+    name: CPUs for tuning
+    description: Defaults to all CPUs.
+  postgresql_config:
+    name: PostgreSQL settings
+    description: Extra settings as "name = value".
+  telemetry:
+    name: TimescaleDB telemetry
+network:
+  5432/tcp: PostgreSQL (only needed for clients outside Home Assistant)

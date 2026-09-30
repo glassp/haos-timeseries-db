@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Runs next to the server after every start: updates the timescaledb
+# extension and makes users and databases match the add-on options.
+# Never removes users or databases.
+set -euo pipefail
+# shellcheck source=../lib/addon/common.sh
+source /usr/local/lib/addon/common.sh
+
+trap 'warn "Applying users/databases failed; see the errors above. The server keeps running."' ERR
+
+wait_ready || die "PostgreSQL did not become ready"
+
+update_timescaledb
+
+opt '.users[] | @base64' | while IFS= read -r row; do
+    user=$(echo "$row" | base64 -d)
+    name=$(jq -r '.name' <<<"$user")
+    superuser=NOSUPERUSER
+    [ "$(jq -r '.superuser // false' <<<"$user")" = true ] && superuser=SUPERUSER
+    password=$(jq -r '.password' <<<"$user")
+    sql -d postgres -v name="$name" -v pw="$password" -v su="$superuser" <<'SQL'
+SELECT format('CREATE ROLE %I', :'name')
+WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'name') \gexec
+ALTER ROLE :"name" WITH LOGIN :su PASSWORD :'pw';
+SQL
+done
+
+opt '.databases[] | [.name, (.owner // "postgres"), (.timescaledb != false)] | @tsv' |
+    while IFS=$'\t' read -r name owner timescaledb; do
+        sql -d postgres -v name="$name" -v owner="$owner" <<'SQL'
+SELECT format('CREATE DATABASE %I OWNER %I', :'name', :'owner')
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'name') \gexec
+ALTER DATABASE :"name" OWNER TO :"owner";
+SQL
+        if [ "$timescaledb" = true ]; then
+            sql -d "$name" -c 'CREATE EXTENSION IF NOT EXISTS timescaledb'
+        fi
+    done
+
+if [ -f "$ANALYZE_FLAG" ]; then
+    log "Collecting planner statistics after the upgrade"
+    as_pg vacuumdb -h "$SOCKET_DIR" -U postgres --all --analyze-in-stages --missing-stats-only
+    rm -f "$ANALYZE_FLAG"
+fi
+
+log "Users and databases are up to date"

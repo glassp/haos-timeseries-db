@@ -1,0 +1,57 @@
+name: TimescaleDB
+version: "1.0.0"
+slug: timescaledb
+description: PostgreSQL 18 with TimescaleDB for long-term time-series data
+url: https://github.com/glassp/haos-timeseries-db/tree/main/timescaledb
+arch:
+  - amd64
+  - aarch64
+startup: services
+boot: auto
+# PostgreSQL files are only consistent while the server is stopped.
+backup: cold
+# Give PostgreSQL time to finish a checkpoint on shutdown.
+timeout: 120
+watchdog: tcp://[HOST]:[PORT:5432]
+map:
+  - type: share
+    read_only: false
+ports:
+  5432/tcp: null
+ports_description:
+  5432/tcp: PostgreSQL (only needed for clients outside Home Assistant)
+options:
+  databases:
+    - name: homeassistant
+      owner: homeassistant
+      timescaledb: true
+  users:
+    - name: homeassistant
+      password: ""
+  pg_hba: []
+  max_connections: 100
+  tune: true
+  postgresql_config: []
+  telemetry: false
+schema:
+  databases:
+    - name: match(^[a-z_][a-z0-9_]{0,62}$)
+      owner: match(^[a-z_][a-z0-9_]{0,62}$)?
+      timescaledb: bool?
+  users:
+    - name: match(^[a-z_][a-z0-9_]{0,62}$)
+      password: password
+      superuser: bool?
+  pg_hba:
+    - type: list(local|host|hostssl|hostnossl)
+      database: str
+      user: str
+      address: str?
+      method: list(trust|reject|scram-sha-256|md5|password|cert)
+  max_connections: int(10,1000)
+  tune: bool
+  memory: match(^[0-9]+(MB|GB)$)?
+  cpus: int(1,128)?
+  postgresql_config:
+    - match(^[a-z_.]+\s*=\s*.+$)
+  telemetry: bool
