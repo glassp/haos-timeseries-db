@@ -3,6 +3,10 @@
 # existing data when the major version is bumped.
 ARG PG_IMAGE=timescale/timescaledb:2.30.2-pg18
 ARG PG_PREV_IMAGE=timescale/timescaledb:2.30.2-pg17
+# Web UI for the optional DB explorer.
+ARG DBGATE_IMAGE=dbgate/dbgate:7.3.1-alpine
+
+FROM ${DBGATE_IMAGE} AS dbgate
 
 FROM ${PG_PREV_IMAGE} AS prev
 # PostgreSQL binaries are relocatable as long as bin/, lib/postgresql and
@@ -16,11 +20,17 @@ RUN set -eux; \
 
 FROM ${PG_IMAGE}
 
-RUN apk add --no-cache jq su-exec tini
+RUN apk add --no-cache jq su-exec tini nginx libstdc++ libgcc \
+    && adduser -D -H -s /sbin/nologin explorer
 
 COPY --from=prev /out /opt/pg-prev
 # Fail the build if the bundled old server cannot run on this base image.
 RUN /opt/pg-prev/bin/postgres -V && /opt/pg-prev/bin/pg_ctl -V
+
+# DbGate is a bundled Node app; take the Node binary it was built for too.
+COPY --from=dbgate /usr/local/bin/node /usr/local/bin/node
+COPY --from=dbgate /home/dbgate-docker /home/dbgate-docker
+RUN node --version
 
 COPY rootfs /
 RUN chmod +x /usr/local/bin/addon-*

@@ -27,5 +27,8 @@ configuration:
     description: Extra settings as "name = value".
   telemetry:
     name: TimescaleDB telemetry
+  explorer:
+    name: DB explorer
+    description: Read-only DbGate web UI in the add-on's Web UI / sidebar panel. Adds the login role postgres-addon-ui-explorer; turning it off revokes that login.
 network:
   5432/tcp: PostgreSQL (only needed for clients outside Home Assistant)

@@ -8,3 +8,4 @@
 - In-place `pg_upgrade` from PostgreSQL 17.
 - Hot backups via `pg_dump`, restored automatically on start.
 - `external_access` toggle; Home Assistant and add-ons can always connect.
+- Optional read-only DB explorer (DbGate) in the ingress panel.

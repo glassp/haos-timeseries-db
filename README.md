@@ -19,6 +19,6 @@ aarch64.
 
 ### Bumping versions
 
-1. Update both `ARG` image tags in `timescaledb/Dockerfile`. Keep them on the
+1. Update the `ARG` image tags in `timescaledb/Dockerfile` (PostgreSQL and DbGate). Keep them on the
    same TimescaleDB version: `pg_upgrade` needs it on both sides.
 2. Bump `version` in `timescaledb/config.yaml` and add a `CHANGELOG.md` entry.

@@ -47,3 +47,9 @@ update_timescaledb() {
             fi
         done
 }
+
+# Opt-in DB explorer (DbGate behind ingress).
+EXPLORER_ROLE=postgres-addon-ui-explorer
+EXPLORER_PASSWORD_FILE=/run/addon/explorer-password
+EXPLORER_PORT=3000
+INGRESS_PORT=8099

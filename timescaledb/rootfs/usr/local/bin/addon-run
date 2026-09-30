@@ -154,6 +154,8 @@ write_hba() {
         echo "local all postgres trust"
         opt '.pg_hba[] | [.type, .database, .user, (.address // empty), .method] | join("  ")'
         echo "local all all trust"
+        echo "host  all all 127.0.0.1/32 scram-sha-256"
+        echo "host  all all ::1/128      scram-sha-256"
         echo "host  all all $internal scram-sha-256"
         echo "host  all all 0.0.0.0/0 $external"
         echo "host  all all ::/0      $external"
@@ -173,6 +175,51 @@ check_port_mapping() {
         warn "external_access is on, but no host port is set for 5432/tcp in the Network section, so only Home Assistant and add-ons can connect"
     elif [ "$(opt '.external_access')" != true ] && [ -n "$port" ]; then
         warn "Port $port is published, but external_access is off, so connections from outside Home Assistant are rejected"
+    fi
+}
+
+# nginx serves the ingress panel: DbGate when the explorer is enabled, a
+# short notice otherwise. Only the Supervisor's ingress proxy may connect.
+start_ingress() {
+    local location
+    mkdir -p /run/addon
+    chmod 700 /run/addon
+    if [ "$(opt '.explorer')" = true ]; then
+        head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' >"$EXPLORER_PASSWORD_FILE"
+        chmod 600 "$EXPLORER_PASSWORD_FILE"
+        location="proxy_pass http://127.0.0.1:$EXPLORER_PORT;
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade \$http_upgrade;
+            proxy_set_header Connection \$connection_upgrade;
+            proxy_buffering off;
+            proxy_read_timeout 1h;
+            client_max_body_size 50m;"
+    else
+        rm -f "$EXPLORER_PASSWORD_FILE"
+        location="default_type text/html;
+            return 200 '<!doctype html><meta name=color-scheme content=\"light dark\"><body style=\"font-family:sans-serif;padding:2em\"><h2>DB explorer is off</h2><p>Enable <code>explorer</code> in the add-on configuration and restart the add-on.</p>';"
+    fi
+    cat >/run/addon/nginx.conf <<EOF
+worker_processes 1;
+pid /run/addon/nginx.pid;
+error_log /dev/stderr warn;
+events { worker_connections 64; }
+http {
+    access_log off;
+    map \$http_upgrade \$connection_upgrade { default upgrade; '' close; }
+    server {
+        listen $INGRESS_PORT;
+        allow ${INGRESS_ALLOW:-172.30.32.2};
+        deny all;
+        location / {
+            $location
+        }
+    }
+}
+EOF
+    nginx -c /run/addon/nginx.conf
+    if [ "$(opt '.explorer')" = true ]; then
+        (/usr/local/bin/addon-explorer &)
     fi
 }
 
@@ -240,6 +287,7 @@ write_hba
 check_port_mapping
 [ "$restore" = false ] || restore_dump
 
+start_ingress
 # Double fork so the reconciler is reparented to tini and never shows up as
 # an unknown child of the postmaster.
 (/usr/local/bin/addon-reconcile &)

@@ -38,6 +38,7 @@ max_connections: 100
 tune: true
 postgresql_config: []
 telemetry: false
+explorer: false
 ```
 
 ### `databases`
@@ -110,6 +111,23 @@ postgresql_config:
 ### `telemetry`
 
 Send TimescaleDB's anonymous telemetry. Off by default.
+
+### `explorer`
+
+Turns on a read-only database explorer ([DbGate](https://github.com/dbgate/dbgate),
+MIT licensed) behind the add-on's **Open Web UI** button; you can also show it
+in the sidebar from the add-on's Info tab. It follows your system's dark or
+light theme (changeable under DbGate's settings).
+
+When enabled, the add-on creates the login role `postgres-addon-ui-explorer`
+with a new random password on every start. It is a member of
+`pg_read_all_data`, so it can read every table in every database, including
+tables created later, but never write. Turning the option off revokes the
+role's login; the role itself stays.
+
+The explorer is only reachable through Home Assistant (ingress), so only
+logged-in Home Assistant admins can open it; it is never exposed on the
+network, regardless of `external_access`.
 
 ## Backups
 

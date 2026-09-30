@@ -12,6 +12,23 @@ wait_ready 3600 || die "PostgreSQL did not become ready"
 
 update_timescaledb
 
+# Explorer role: read access to everything (pg_read_all_data also covers
+# tables created later). Opting out only takes away its login.
+if [ "$(opt '.explorer')" = true ]; then
+    sql -d postgres -v name="$EXPLORER_ROLE" -v pw="$(cat "$EXPLORER_PASSWORD_FILE")" <<'SQL'
+SELECT format('CREATE ROLE %I', :'name')
+WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'name') \gexec
+ALTER ROLE :"name" WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD :'pw';
+ALTER ROLE :"name" SET default_transaction_read_only = on;
+GRANT pg_read_all_data, pg_read_all_stats TO :"name";
+SQL
+else
+    sql -d postgres -v name="$EXPLORER_ROLE" <<'SQL'
+SELECT format('ALTER ROLE %I NOLOGIN', :'name')
+WHERE EXISTS (SELECT FROM pg_roles WHERE rolname = :'name') \gexec
+SQL
+fi
+
 opt '.users[] | @base64' | while IFS= read -r row; do
     user=$(echo "$row" | base64 -d)
     name=$(jq -r '.name' <<<"$user")

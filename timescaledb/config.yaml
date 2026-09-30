@@ -21,6 +21,10 @@ backup_exclude:
 timeout: 120
 # Read-only lookup of the published port, to warn about a mismatch with external_access.
 hassio_api: true
+# Optional DB explorer (DbGate), only reachable through Home Assistant.
+ingress: true
+panel_icon: mdi:database-search
+panel_title: DB Explorer
 map:
   - type: share
     read_only: false
@@ -42,6 +46,7 @@ options:
   tune: true
   postgresql_config: []
   telemetry: false
+  explorer: false
 schema:
   databases:
     - name: match(^[a-z_][a-z0-9_]{0,62}$)
@@ -65,3 +70,4 @@ schema:
   postgresql_config:
     - match(^[a-z_.]+\s*=\s*.+$)
   telemetry: bool
+  explorer: bool

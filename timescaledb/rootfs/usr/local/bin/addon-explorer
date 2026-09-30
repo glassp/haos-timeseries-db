@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Runs DbGate behind the ingress proxy, read-only as $EXPLORER_ROLE, and
+# restarts it if it exits.
+set -euo pipefail
+# shellcheck source=../lib/addon/common.sh
+source /usr/local/lib/addon/common.sh
+
+mkdir -p /data/explorer
+chown -R explorer:explorer /data/explorer
+
+export WORKSPACE_DIR=/data/explorer
+export PORT=$EXPLORER_PORT
+export NODE_OPTIONS="--require /usr/local/lib/addon/listen-localhost.js"
+export CONNECTIONS=timescaledb
+export LABEL_timescaledb=TimescaleDB
+export ENGINE_timescaledb=postgres@dbgate-plugin-postgres
+export SERVER_timescaledb=127.0.0.1
+export PORT_timescaledb=5432
+export USER_timescaledb=$EXPLORER_ROLE
+PASSWORD_timescaledb=$(cat "$EXPLORER_PASSWORD_FILE")
+export PASSWORD_timescaledb
+export READONLY_timescaledb=1
+
+cd /home/dbgate-docker
+while true; do
+    log "Starting DB explorer"
+    su-exec explorer node bundle.js --listen-api || true
+    warn "DB explorer exited, restarting in 5s"
+    sleep 5
+done

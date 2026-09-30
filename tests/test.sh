@@ -40,7 +40,8 @@ write_options() {
   "tune": true,
   "memory": "256MB",
   "postgresql_config": ["work_mem = 8MB"],
-  "telemetry": false
+  "telemetry": false,
+  "explorer": ${3:-false}
 }
 EOF
 }
@@ -50,7 +51,8 @@ logged() { grep -qF "$1" <<<"$(docker logs "$name" 2>&1)"; }
 
 start() {
     docker rm -f "$name" >/dev/null 2>&1 || true
-    docker run -d --name "$name" -v "$data:/data" "$name:$1" >/dev/null
+    # Stand-in for the Supervisor's ingress proxy address.
+    docker run -d --name "$name" -e INGRESS_ALLOW=127.0.0.1 -v "$data:/data" "$name:$1" >/dev/null
     for _ in $(seq 180); do
         logged 'Users and databases are up to date' && return
         [ "$(docker inspect -f '{{.State.Running}}' "$name")" = true ] || fail "container exited"
@@ -97,12 +99,29 @@ current_major=$(q 'SHOW server_version_num' | cut -c1-2)
 stop
 
 echo "== Restart is idempotent and picks up new options"
-write_options n3w-pass true
+write_options n3w-pass true true
 pw=n3w-pass
 start current
 docker exec -e PGPASSWORD=n3w-pass "$name" psql -X -At -h 127.0.0.1 -U homeassistant -d homeassistant -c 'SELECT 1' >/dev/null ||
     fail "password change not applied"
 grep -qE '^host +all all 0\.0\.0\.0/0 scram-sha-256$' "$data/pg_hba.conf" || fail "external_access not applied"
+
+echo "== DB explorer"
+explorer_sql() {
+    docker exec "$name" sh -c 'PGPASSWORD=$(cat /run/addon/explorer-password) psql -X -At -h 127.0.0.1 -U postgres-addon-ui-explorer -d homeassistant -c "$1"' - "$1"
+}
+[ "$(explorer_sql 'SELECT count(*) FROM m')" = "$rows" ] || fail "explorer role cannot read tables"
+explorer_sql 'INSERT INTO m VALUES (now(), 1)' >/dev/null 2>&1 && fail "explorer role can write"
+q 'CREATE TABLE later (x int); INSERT INTO later VALUES (1)' >/dev/null
+[ "$(explorer_sql 'SELECT x FROM later')" = 1 ] || fail "explorer role cannot read new tables"
+for _ in $(seq 60); do
+    docker exec "$name" wget -qO- http://127.0.0.1:8099/ 2>/dev/null | grep -qi dbgate && break
+    sleep 1
+done
+docker exec "$name" wget -qO- http://127.0.0.1:8099/ | grep -qi dbgate || fail "DbGate not served through ingress"
+ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$name")
+[ "$(curl -s -o /dev/null -w '%{http_code}' "http://$ip:8099/")" = 403 ] || fail "ingress port open to other hosts"
+curl -s -o /dev/null "http://$ip:3000/" && fail "DbGate reachable without the ingress proxy"
 
 echo "== Hot backup and restore"
 docker exec "$name" addon-backup-pre
@@ -121,6 +140,13 @@ logged 'Restore finished' || fail "restore did not run"
 [ "$(q 'SELECT count(*) FROM m')" = "$rows" ] || fail "row count changed after restore"
 [ "$(q "SELECT count(*) FROM timescaledb_information.hypertables WHERE hypertable_name = 'm'")" = 1 ] || fail "hypertable missing after restore"
 [ ! -e "$data/dump" ] || fail "dump left behind after restore"
+stop
+
+echo "== DB explorer opt-out"
+write_options n3w-pass true false
+start current
+[ "$(q "SELECT rolcanlogin FROM pg_roles WHERE rolname = 'postgres-addon-ui-explorer'")" = f ] || fail "explorer login not revoked"
+docker exec "$name" wget -qO- http://127.0.0.1:8099/ | grep -q 'DB explorer is off' || fail "no disabled notice"
 stop
 
 echo "PASS"
