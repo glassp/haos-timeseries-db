@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Supervisor backup_pre hook: dump roles and every database to $DUMP_DIR.
+# The raw cluster files are excluded from the backup; addon-run restores
+# from these dumps when it starts without a cluster.
+set -euo pipefail
+# shellcheck source=../lib/addon/common.sh
+source /usr/local/lib/addon/common.sh
+
+wait_ready 60 || die "PostgreSQL is not running, cannot dump databases for the backup"
+
+tmp=$DUMP_DIR.tmp
+rm -rf "$tmp"
+mkdir -p "$tmp"
+chown postgres:postgres "$tmp"
+log "Dumping databases for the backup"
+
+as_pg pg_dumpall -h "$SOCKET_DIR" -U postgres --globals-only -f "$tmp/globals.sql"
+
+# manifest.tsv: database, owner, has timescaledb (0/1), dump file.
+# Files are numbered because database names may contain any character.
+i=0
+sql -d postgres -At -F $'\t' -c \
+    "SELECT datname, pg_get_userbyid(datdba) FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY datname" |
+    while IFS=$'\t' read -r db owner; do
+        i=$((i + 1))
+        timescaledb=$(sql -d "$db" -At -c "SELECT count(*) FROM pg_extension WHERE extname = 'timescaledb'")
+        as_pg pg_dump -h "$SOCKET_DIR" -U postgres -Fc -f "$tmp/$i.dump" "$db"
+        printf '%s\t%s\t%s\t%s\n' "$db" "$owner" "$timescaledb" "$i.dump" >>"$tmp/manifest.tsv"
+    done
+
+rm -rf "$DUMP_DIR"
+mv "$tmp" "$DUMP_DIR"
+log "Dumped $(wc -l <"$DUMP_DIR/manifest.tsv") database(s), $(du -sh "$DUMP_DIR" | cut -f1)"

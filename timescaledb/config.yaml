@@ -8,11 +8,21 @@ arch:
   - aarch64
 startup: services
 boot: auto
-# PostgreSQL files are only consistent while the server is stopped.
-backup: cold
+# Hot backups: the pre hook dumps every database to /data/dump and the raw
+# cluster files are excluded; a start with dumps but no cluster restores them.
+backup: hot
+backup_pre: /usr/local/bin/addon-backup-pre
+backup_post: /usr/local/bin/addon-backup-post
+backup_exclude:
+  - postgres/**
+  - data/postgres/**
+  - postgres.upgrade/**
+  - data/postgres.upgrade/**
 # Give PostgreSQL time to finish a checkpoint on shutdown.
 timeout: 120
 watchdog: tcp://[HOST]:[PORT:5432]
+# Read-only lookup of the published port, to warn about a mismatch with external_access.
+hassio_api: true
 map:
   - type: share
     read_only: false
@@ -28,6 +38,7 @@ options:
   users:
     - name: homeassistant
       password: ""
+  external_access: false
   pg_hba: []
   max_connections: 100
   tune: true
@@ -42,6 +53,7 @@ schema:
     - name: match(^[a-z_][a-z0-9_]{0,62}$)
       password: password
       superuser: bool?
+  external_access: bool
   pg_hba:
     - type: list(local|host|hostssl|hostnossl)
       database: str

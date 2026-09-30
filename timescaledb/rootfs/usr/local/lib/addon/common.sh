@@ -8,6 +8,7 @@ HBA_FILE=/data/pg_hba.conf
 SOCKET_DIR=/var/run/postgresql
 PREV_DIR=/opt/pg-prev
 ANALYZE_FLAG=/data/.analyze-after-upgrade
+DUMP_DIR=/data/dump
 
 log()  { echo "[$(date +%H:%M:%S)] INFO: $*"; }
 warn() { echo "[$(date +%H:%M:%S)] WARNING: $*" >&2; }

@@ -5,6 +5,9 @@ configuration:
   users:
     name: Users
     description: Login roles. Passwords are applied on every start.
+  external_access:
+    name: Allow access from outside Home Assistant
+    description: Also needs a host port for 5432/tcp in the Network section. Home Assistant and add-ons can always connect.
   pg_hba:
     name: Client authentication rules
     description: Extra pg_hba.conf rules, checked before the defaults. Rules of type local take no address.

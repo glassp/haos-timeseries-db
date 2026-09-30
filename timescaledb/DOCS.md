@@ -32,6 +32,7 @@ databases:
 users:
   - name: homeassistant
     password: change-me
+external_access: false
 pg_hba: []
 max_connections: 100
 tune: true
@@ -51,6 +52,18 @@ Login roles. Passwords are (re)applied on every start, so changing one here
 and restarting changes it in the database. `superuser: true` makes the role a
 superuser. Removing a user here does **not** drop the role.
 
+### `external_access`
+
+Whether clients outside Home Assistant may connect at all. Home Assistant and
+other add-ons always can: they reach the add-on over the Supervisor's
+internal network.
+
+To let other machines in, turn this on **and** set a host port for
+`5432/tcp` in the **Network** section below the options (the Supervisor, not
+the add-on, publishes ports). The log warns when the two disagree. With the
+toggle off, a published port still accepts TCP connections, but every login
+from outside is rejected.
+
 ### `pg_hba`
 
 Extra client authentication rules, checked before the defaults. Each rule has
@@ -66,17 +79,16 @@ pg_hba:
     method: scram-sha-256
 ```
 
-The generated file always ends with these defaults:
+Use them to narrow `external_access`, e.g. allow only your LAN (with
+`external_access: true`) or require SSL. The generated file always ends with
+these defaults:
 
 ```
-local all all trust                  # unix socket, only reachable inside the add-on
-host  all all 0.0.0.0/0 scram-sha-256
-host  all all ::/0      scram-sha-256
+local all all trust                            # unix socket, only reachable inside the add-on
+host  all all <internal network> scram-sha-256 # Home Assistant and add-ons
+host  all all 0.0.0.0/0 reject                 # scram-sha-256 with external_access
+host  all all ::/0      reject                 # scram-sha-256 with external_access
 ```
-
-So password logins work from anywhere unless you add `reject` rules.
-Home Assistant and other add-ons connect from the Supervisor network
-(`172.30.32.0/23`), so keep that network allowed if you restrict access.
 
 ### `max_connections`, `tune`, `memory`, `cpus`
 
@@ -99,19 +111,19 @@ postgresql_config:
 
 Send TimescaleDB's anonymous telemetry. Off by default.
 
-## Access from outside Home Assistant
-
-The PostgreSQL port is not published by default. Set a host port for
-`5432/tcp` in the **Network** section to connect with psql, DBeaver or
-Grafana running elsewhere.
-
 ## Backups
 
-The add-on uses cold backups: Home Assistant stops the database for the
-duration of a backup so the copied files are consistent. The recorder queues
-events meanwhile.
+Backups are hot: the database keeps running. Before a backup the add-on
+writes a `pg_dump` of every database (plus roles) to `/data/dump`; the raw
+database files are left out of the backup. Dumps are compressed and skip
+indexes, so backups are much smaller than the database on disk.
 
-For a logical dump, use the mapped `/share` folder, e.g. from the
+When a backup is restored, the add-on notices the dumps on its next start,
+creates a fresh cluster and loads them. Until that finishes nobody can log
+in; large databases can take a while. If the restore fails, the dumps are
+kept and the next start tries again.
+
+For a manual dump, use the mapped `/share` folder, e.g. from the
 *Advanced SSH & Web Terminal* add-on with protection mode off:
 
 ```sh

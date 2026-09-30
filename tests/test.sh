@@ -13,7 +13,11 @@ prev_prev_image=${prev_image%-pg*}-pg$((prev_major - 1))
 
 name=addon-test
 data=$(mktemp -d)
-cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; sudo rm -rf "$data" 2>/dev/null || rm -rf "$data"; }
+dirs=("$data")
+cleanup() {
+    docker rm -f "$name" >/dev/null 2>&1 || true
+    sudo rm -rf "${dirs[@]}" 2>/dev/null || rm -rf "${dirs[@]}"
+}
 trap cleanup EXIT
 
 fail() { echo "FAIL: $*" >&2; docker logs "$name" 2>&1 | tail -n 80 >&2 || true; exit 1; }
@@ -27,6 +31,7 @@ write_options() {
 {
   "databases": [{ "name": "homeassistant", "owner": "homeassistant", "timescaledb": true }],
   "users": [{ "name": "homeassistant", "password": "$1" }],
+  "external_access": ${2:-false},
   "pg_hba": [
     { "type": "local", "database": "all", "user": "postgres", "method": "trust" },
     { "type": "host", "database": "all", "user": "all", "address": "127.0.0.1/32", "method": "scram-sha-256" }
@@ -73,6 +78,7 @@ q "CREATE TABLE m (t timestamptz NOT NULL, v double precision);
    SELECT create_hypertable('m', by_range('t'));
    INSERT INTO m SELECT g, random() FROM generate_series(now() - interval '10 days', now(), interval '1 minute') g;" >/dev/null
 rows=$(q 'SELECT count(*) FROM m')
+grep -qE '^host +all all 0\.0\.0\.0/0 reject$' "$data/pg_hba.conf" || fail "external access not rejected by default"
 [ "$(q 'SHOW work_mem')" = 8MB ] || fail "postgresql_config not applied"
 [ "$(q 'SHOW max_connections')" = 50 ] || fail "max_connections not applied"
 stop
@@ -86,11 +92,31 @@ current_major=$(q 'SHOW server_version_num' | cut -c1-2)
 [ ! -e "$data/postgres.upgrade" ] || fail "upgrade dir left behind"
 stop
 
-echo "== Restart is idempotent and picks up a new password"
-write_options n3w-pass
+echo "== Restart is idempotent and picks up new options"
+write_options n3w-pass true
 start current
 docker exec -e PGPASSWORD=n3w-pass "$name" psql -X -At -h 127.0.0.1 -U homeassistant -d homeassistant -c 'SELECT 1' >/dev/null ||
     fail "password change not applied"
+grep -qE '^host +all all 0\.0\.0\.0/0 scram-sha-256$' "$data/pg_hba.conf" || fail "external_access not applied"
+
+echo "== Hot backup and restore"
+docker exec "$name" addon-backup-pre
+[ -f "$data/dump/manifest.tsv" ] || fail "no dump written"
+# What a restored backup looks like: everything but the excluded cluster.
+restored=$(mktemp -d)
+dirs+=("$restored")
+sudo cp -a "$data/." "$restored/"
+sudo rm -rf "$restored/postgres"
+docker exec "$name" addon-backup-post
+[ ! -e "$data/dump" ] || fail "backup_post left the dump behind"
+stop
+data=$restored
+start current
+docker logs "$name" 2>&1 | grep -q 'Restore finished' || fail "restore did not run"
+q() { docker exec -e PGPASSWORD=n3w-pass "$name" psql -X -At -v ON_ERROR_STOP=1 -h 127.0.0.1 -U homeassistant -d homeassistant -c "$1"; }
+[ "$(q 'SELECT count(*) FROM m')" = "$rows" ] || fail "row count changed after restore"
+[ "$(q "SELECT count(*) FROM timescaledb_information.hypertables WHERE hypertable_name = 'm'")" = 1 ] || fail "hypertable missing after restore"
+[ ! -e "$data/dump" ] || fail "dump left behind after restore"
 stop
 
 echo "PASS"

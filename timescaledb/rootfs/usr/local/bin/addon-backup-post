@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Supervisor backup_post hook: the dumps only need to live inside the backup.
+set -euo pipefail
+# shellcheck source=../lib/addon/common.sh
+source /usr/local/lib/addon/common.sh
+
+rm -rf "$DUMP_DIR" "$DUMP_DIR.tmp"
