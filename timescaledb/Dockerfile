@@ -28,6 +28,10 @@ RUN chmod +x /usr/local/bin/addon-*
 ENV PGDATA=/data/postgres
 # SIGINT = fast shutdown; SIGTERM would wait for clients like the recorder.
 STOPSIGNAL SIGINT
+# The start period covers first-time init, upgrades and restores; the first
+# success ends it early.
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=1h \
+    CMD su-exec postgres pg_isready -q -h /var/run/postgresql -U postgres
 ENTRYPOINT ["/usr/local/bin/addon-run"]
 CMD []
 

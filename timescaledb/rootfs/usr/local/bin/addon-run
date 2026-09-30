@@ -178,11 +178,10 @@ check_port_mapping() {
 # Start after a restore from a hot backup: /data has dumps but no cluster.
 # Loads them into the freshly initialized cluster before the real start.
 restore_dump() {
-    local restore_hba=/tmp/pg_hba.restore rc=0
+    local rc=0
     log "Restoring databases from the backup (this can take a while)"
-    # Listen on TCP so the watchdog stays happy, but let nobody in yet.
-    printf 'local all all trust\nhost all all all reject\n' >"$restore_hba"
-    as_pg pg_ctl -D "$PGDATA" -w -t 3600 -l /tmp/pg-restore.log -o "-c hba_file=$restore_hba" start ||
+    # Socket only: no client can connect before the restore is complete.
+    as_pg pg_ctl -D "$PGDATA" -w -t 3600 -l /tmp/pg-restore.log -o "-c listen_addresses=''" start ||
         { cat /tmp/pg-restore.log >&2; die "Could not start PostgreSQL for the restore"; }
 
     # Existing roles (postgres) make some statements fail; that is expected.
@@ -217,6 +216,8 @@ SQL
 }
 
 validate_options
+# postgres must be able to reach its files below /data.
+chmod a+x /data
 mkdir -p "$SOCKET_DIR"
 chown postgres:postgres "$SOCKET_DIR"
 if [ -d "$PGDATA" ] && [ "$(stat -c %U "$PGDATA")" != postgres ]; then
