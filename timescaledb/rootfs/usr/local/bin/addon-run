@@ -240,7 +240,7 @@ write_hba
 check_port_mapping
 [ "$restore" = false ] || restore_dump
 
-# Double fork so the reconciler is reparented to init and never shows up as
+# Double fork so the reconciler is reparented to tini and never shows up as
 # an unknown child of the postmaster.
 (/usr/local/bin/addon-reconcile &)
 

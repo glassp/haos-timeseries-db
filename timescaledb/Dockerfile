@@ -16,7 +16,7 @@ RUN set -eux; \
 
 FROM ${PG_IMAGE}
 
-RUN apk add --no-cache jq su-exec
+RUN apk add --no-cache jq su-exec tini
 
 COPY --from=prev /out /opt/pg-prev
 # Fail the build if the bundled old server cannot run on this base image.
@@ -32,7 +32,8 @@ STOPSIGNAL SIGINT
 # success ends it early.
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=1h \
     CMD su-exec postgres pg_isready -q -h /var/run/postgresql -U postgres
-ENTRYPOINT ["/usr/local/bin/addon-run"]
+# Own init, so the reconciler is always reaped by tini, never by postgres.
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/addon-run"]
 CMD []
 
 ARG BUILD_ARCH

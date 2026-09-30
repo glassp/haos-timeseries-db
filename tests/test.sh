@@ -45,11 +45,14 @@ write_options() {
 EOF
 }
 
+# Not `docker logs | grep -q`: grep exits early and pipefail reports SIGPIPE.
+logged() { grep -qF "$1" <<<"$(docker logs "$name" 2>&1)"; }
+
 start() {
     docker rm -f "$name" >/dev/null 2>&1 || true
     docker run -d --name "$name" -v "$data:/data" "$name:$1" >/dev/null
     for _ in $(seq 180); do
-        docker logs "$name" 2>&1 | grep -q 'Users and databases are up to date' && return
+        logged 'Users and databases are up to date' && return
         [ "$(docker inspect -f '{{.State.Running}}' "$name")" = true ] || fail "container exited"
         sleep 1
     done
@@ -114,7 +117,7 @@ docker exec "$name" addon-backup-post
 stop
 data=$restored
 start current
-docker logs "$name" 2>&1 | grep -q 'Restore finished' || fail "restore did not run"
+logged 'Restore finished' || fail "restore did not run"
 [ "$(q 'SELECT count(*) FROM m')" = "$rows" ] || fail "row count changed after restore"
 [ "$(q "SELECT count(*) FROM timescaledb_information.hypertables WHERE hypertable_name = 'm'")" = 1 ] || fail "hypertable missing after restore"
 [ ! -e "$data/dump" ] || fail "dump left behind after restore"
